@@ -3,7 +3,7 @@
 """DNS server."""
 import asyncio
 import struct
-import requests
+import aiohttp
 
 
 class DNSHeader:
@@ -151,18 +151,19 @@ class DNSProtocol(asyncio.DatagramProtocol):
         self.transport = None
         self.loop = loop
 
-    def get_ip(self, name):
+    async def get_A_record(self, name):
         try:
             url = 'http://119.29.29.29/d?dn=%s' % name.decode('utf-8')
-            r = requests.get(url, timeout=5)
-            result = [[int(n) for n in ip.split('.')] for ip in r.text.split(';')]
-            return result
+            with aiohttp.Timeout(3):
+                async with aiohttp.get(url) as r:
+                    text = await r.text()
+                    result = [[int(n) for n in ip.split('.')] for ip in text.split(';')]
+                    return result
         except Exception as e:
             print(e)
             return None
 
-    @asyncio.coroutine
-    def resolve(self, header, question, addr):
+    async def resolve(self, header, question, addr):
         data = bytes()
         h = DNSHeader()
         h.QR = 1
@@ -176,7 +177,7 @@ class DNSProtocol(asyncio.DatagramProtocol):
         ans.CLASS = question.QClass
         ans.TTL = 600
         ans.RDLENGTH = 4
-        ip_array = self.get_ip(question.QName)
+        ip_array = await self.get_A_record(question.QName)
         if ip_array:
             h.ANCOUNT = len(ip_array)
             data += DNSHeader.encode(h)
