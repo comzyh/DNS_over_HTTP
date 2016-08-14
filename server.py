@@ -96,7 +96,6 @@ class DNSQuestion:
             cur += length + 1
             q.QName += b'.' if data[cur] else b''
         cur += 1
-        print('cur%s' % cur)
         data = data[cur:]
         q.QType, = struct.unpack('>H', data[0:2])
         q.QClass, = struct.unpack('>H', data[2:4])
@@ -152,15 +151,24 @@ class DNSProtocol(asyncio.DatagramProtocol):
         self.transport = None
         self.loop = loop
 
-    async def resolve(self, header, question, addr):
+    def get_ip(self, name):
+        try:
+            url = 'http://119.29.29.29/d?dn=%s' % name.decode('utf-8')
+            r = requests.get(url, timeout=5)
+            result = [[int(n) for n in ip.split('.')] for ip in r.text.split(';')]
+            return result
+        except Exception as e:
+            print(e)
+            return None
+
+    @asyncio.coroutine
+    def resolve(self, header, question, addr):
         data = bytes()
         h = DNSHeader()
         h.QR = 1
         h.ID = header.ID
         h.QDCOUNT = 1  # origin query
-        h.ANCOUNT = 1
-        data += DNSHeader.encode(h)
-        data += DNSQuestion.encode(question)
+
         ans = DNSResource()
         'NAME', 'TYPE', 'CLASS', 'TTL', 'RDLENGTH', 'RDATA'
         ans.NAME = 0x0c  # 12 , first question
@@ -168,22 +176,25 @@ class DNSProtocol(asyncio.DatagramProtocol):
         ans.CLASS = question.QClass
         ans.TTL = 600
         ans.RDLENGTH = 4
-        ans.RDATA = bytes([1, 2, 3, 4])
-        data += DNSResource.encode(ans)
-        self.transport.sendto(data, addr)
+        ip_array = self.get_ip(question.QName)
+        if ip_array:
+            h.ANCOUNT = len(ip_array)
+            data += DNSHeader.encode(h)
+            data += DNSQuestion.encode(question)
+            for ip in ip_array:
+                ans.RDATA = bytes(ip)
+                data += DNSResource.encode(ans)
+            self.transport.sendto(data, addr)
 
     def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data, addr):
-        print('Received %r bytes from %s' % (len(data), addr))
         h = DNSHeader.decode(data[:12])
         if h.Opcode != 0 or h.QDCOUNT != 1:
             return
-        print(h)
         if h.QDCOUNT:
             q, _ = DNSQuestion.decode(data[12:])
-            print(q)
             if q.QType == 1 and q.QClass == 1:
                 asyncio.ensure_future(self.resolve(h, q, addr), loop=self.loop)
 
